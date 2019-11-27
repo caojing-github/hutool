@@ -56,11 +56,23 @@ public class XmlUtil {
 	/**
 	 * 在XML中无效的字符 正则
 	 */
-	public final static String INVALID_REGEX = "[\\x00-\\x08\\x0b-\\x0c\\x0e-\\x1f]";
+	public static final String INVALID_REGEX = "[\\x00-\\x08\\x0b-\\x0c\\x0e-\\x1f]";
 	/**
 	 * XML格式化输出默认缩进量
 	 */
-	public final static int INDENT_DEFAULT = 2;
+	public static final int INDENT_DEFAULT = 2;
+
+	/**
+	 * 默认的DocumentBuilderFactory实现
+	 */
+	private static String defaultDocumentBuilderFactory = "com.sun.org.apache.xerces.internal.jaxp.DocumentBuilderFactoryImpl";
+
+	/**
+	 * 禁用默认的DocumentBuilderFactory，禁用后如果有第三方的实现（如oracle的xdb包中的xmlparse），将会自动加载实现。
+	 */
+	synchronized public static void disableDefaultDocumentBuilderFactory(){
+		defaultDocumentBuilderFactory = null;
+	}
 
 	// -------------------------------------------------------------------------------------- Read
 
@@ -387,15 +399,32 @@ public class XmlUtil {
 	 * @since 4.1.2
 	 */
 	public static DocumentBuilder createDocumentBuilder() {
-		final DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-		disableXXE(dbf);
 		DocumentBuilder builder;
 		try {
-			builder = dbf.newDocumentBuilder();
+			builder = createDocumentBuilderFactory().newDocumentBuilder();
 		} catch (Exception e) {
 			throw new UtilException(e, "Create xml document error!");
 		}
 		return builder;
+	}
+
+	/**
+	 * 创建{@link DocumentBuilderFactory}
+	 * <p>
+	 *     默认使用"com.sun.org.apache.xerces.internal.jaxp.DocumentBuilderFactoryImpl"<br>
+	 *     如果使用第三方实现，请调用{@link #disableDefaultDocumentBuilderFactory()}
+	 * </p>
+	 *
+	 * @return {@link DocumentBuilderFactory}
+	 */
+	public static DocumentBuilderFactory createDocumentBuilderFactory(){
+		final DocumentBuilderFactory factory;
+		if(StrUtil.isNotEmpty(defaultDocumentBuilderFactory)){
+			factory = DocumentBuilderFactory.newInstance(defaultDocumentBuilderFactory, null);
+		} else{
+			factory = DocumentBuilderFactory.newInstance();
+		}
+		return disableXXE(factory);
 	}
 
 	/**
@@ -406,9 +435,21 @@ public class XmlUtil {
 	 * @return XML文档
 	 */
 	public static Document createXml(String rootElementName) {
-		final Document doc = createXml();
-		doc.appendChild(doc.createElement(rootElementName));
+		return createXml(rootElementName, null);
+	}
 
+	/**
+	 * 创建XML文档<br>
+	 * 创建的XML默认是utf8编码，修改编码的过程是在toStr和toFile方法里，即XML在转为文本的时候才定义编码
+	 *
+	 * @param rootElementName 根节点名称
+	 * @param namespace       命名空间，无则传null
+	 * @return XML文档
+	 * @since 5.0.4
+	 */
+	public static Document createXml(String rootElementName, String namespace) {
+		final Document doc = createXml();
+		doc.appendChild(null == namespace ? doc.createElement(rootElementName) : doc.createElementNS(rootElementName, namespace));
 		return doc;
 	}
 
@@ -640,30 +681,19 @@ public class XmlUtil {
 	 * @since 4.0.8
 	 */
 	public static String escape(String string) {
-		final StringBuilder sb = new StringBuilder(string.length());
-		for (int i = 0, length = string.length(); i < length; i++) {
-			char c = string.charAt(i);
-			switch (c) {
-				case '&':
-					sb.append("&amp;");
-					break;
-				case '<':
-					sb.append("&lt;");
-					break;
-				case '>':
-					sb.append("&gt;");
-					break;
-				case '"':
-					sb.append("&quot;");
-					break;
-				case '\'':
-					sb.append("&apos;");
-					break;
-				default:
-					sb.append(c);
-			}
-		}
-		return sb.toString();
+		return EscapeUtil.escape(string);
+	}
+
+	/**
+	 * 反转义XML特殊字符:
+	 *
+	 * @param string 被替换的字符串
+	 * @return 替换后的字符串
+	 * @since 5.0.6
+	 * @see EscapeUtil#unescape(String)
+	 */
+	public static String unescape(String string) {
+		return EscapeUtil.unescape(string);
 	}
 
 	/**
@@ -674,7 +704,7 @@ public class XmlUtil {
 	 * @since 4.0.8
 	 */
 	public static Map<String, Object> xmlToMap(String xmlStr) {
-		return xmlToMap(xmlStr, new HashMap<String, Object>());
+		return xmlToMap(xmlStr, new HashMap<>());
 	}
 
 	/**
@@ -685,7 +715,7 @@ public class XmlUtil {
 	 * @since 4.0.8
 	 */
 	public static Map<String, Object> xmlToMap(Node node) {
-		return xmlToMap(node, new HashMap<String, Object>());
+		return xmlToMap(node, new HashMap<>());
 	}
 
 	/**
@@ -745,6 +775,19 @@ public class XmlUtil {
 	}
 
 	/**
+	 * 将Map转换为XML格式的字符串
+	 *
+	 * @param data      Map类型数据
+	 * @param rootName  根节点名
+	 * @param namespace 命名空间，可以为null
+	 * @return XML格式的字符串
+	 * @since 5.0.4
+	 */
+	public static String mapToXmlStr(Map<?, ?> data, String rootName, String namespace) {
+		return toStr(mapToXml(data, rootName, namespace));
+	}
+
+	/**
 	 * 将Map转换为XML
 	 *
 	 * @param data     Map类型数据
@@ -753,8 +796,22 @@ public class XmlUtil {
 	 * @since 4.0.9
 	 */
 	public static Document mapToXml(Map<?, ?> data, String rootName) {
+
+		return mapToXml(data, rootName, null);
+	}
+
+	/**
+	 * 将Map转换为XML
+	 *
+	 * @param data      Map类型数据
+	 * @param rootName  根节点名
+	 * @param namespace 命名空间，可以为null
+	 * @return XML
+	 * @since 5.0.4
+	 */
+	public static Document mapToXml(Map<?, ?> data, String rootName, String namespace) {
 		final Document doc = createXml();
-		final Element root = appendChild(doc, rootName);
+		final Element root = appendChild(doc, rootName, namespace);
 
 		mapToXml(doc, root, data);
 		return doc;
@@ -780,8 +837,21 @@ public class XmlUtil {
 	 * @since 4.0.9
 	 */
 	public static Element appendChild(Node node, String tagName) {
+		return appendChild(node, tagName, null);
+	}
+
+	/**
+	 * 在已有节点上创建子节点
+	 *
+	 * @param node      节点
+	 * @param tagName   标签名
+	 * @param namespace 命名空间，无传null
+	 * @return 子节点
+	 * @since 5.0.4
+	 */
+	public static Element appendChild(Node node, String tagName, String namespace) {
 		Document doc = (node instanceof Document) ? (Document) node : node.getOwnerDocument();
-		Element child = doc.createElement(tagName);
+		Element child = (null == namespace) ? doc.createElement(tagName) : doc.createElementNS(namespace, tagName);
 		node.appendChild(child);
 		return child;
 	}
